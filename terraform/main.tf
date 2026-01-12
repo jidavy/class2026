@@ -1,13 +1,55 @@
-# ... (Keep your terraform {} and provider blocks the same) ...
+terraform {
+  backend "s3" {
+    bucket  = "techbleat-cicd-state-bucket"
+    key     = "envs/dev/terraform.tfstate"
+    region  = "eu-west-1"
+    encrypt = true
+  }
+  required_version = ">= 1.6.0"
 
-# -------------------------
-# Security Groups
-# -------------------------
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
 
-# Security Group for Frontend (Port 80)
+provider "aws" {
+  region = "eu-west-1"
+}
+
+# ---------------------------------------------------------
+# STEP 1: Search for the latest AMIs built by Packer
+# ---------------------------------------------------------
+
+data "aws_ami" "latest_nginx" {
+  most_recent = true
+  owners      = ["self"]
+  filter {
+    name   = "name"
+    values = ["nginx-market-*"]
+  }
+}
+
+data "aws_ami" "latest_backend" {
+  most_recent = true
+  owners      = ["self"]
+  filter {
+    name   = "name"
+    values = ["backend-market-*"]
+  }
+}
+
+# ---------------------------------------------------------
+# SECURITY GROUPS
+# ---------------------------------------------------------
+
+# Frontend Security Group
 resource "aws_security_group" "web_sg" {
-  name   = "web-sg"
-  vpc_id = var.project_vpc
+  name        = "web-sg"
+  description = "Allow SSH and HTTP"
+  vpc_id      = var.project_vpc
 
   ingress {
     from_port   = 22
@@ -31,10 +73,10 @@ resource "aws_security_group" "web_sg" {
   }
 }
 
-# Security Group for Backend (Ports 8080 & 9090)
+# Backend Security Group (Ports 8080 and 9090)
 resource "aws_security_group" "backend_sg" {
-  name   = "backend-sg"
-  vpc_id = var.project_vpc
+  name        = "backend-sg"
+  vpc_id      = var.project_vpc
 
   ingress {
     from_port   = 22
@@ -67,13 +109,13 @@ resource "aws_security_group" "backend_sg" {
   }
 }
 
-# -------------------------
-# EC2 Instances
-# -------------------------
+# ---------------------------------------------------------
+# STEP 2: EC2 INSTANCES (Linked to Data Sources)
+# ---------------------------------------------------------
 
-# Node 1: Frontend
+# Node 1: Frontend (Nginx)
 resource "aws_instance" "web-node" {
-  ami                    = var.nginx_ami_id
+  ami                    = data.aws_ami.latest_nginx.id
   instance_type          = var.project_instance_type
   subnet_id              = var.project_subnet
   vpc_security_group_ids = [aws_security_group.web_sg.id]
@@ -81,9 +123,9 @@ resource "aws_instance" "web-node" {
   tags = { Name = "web-node-frontend" }
 }
 
-# Node 2: Python Backend
+# Node 2: Python Backend (Port 8080)
 resource "aws_instance" "python-node" {
-  ami                    = var.backend_ami_id
+  ami                    = data.aws_ami.latest_backend.id
   instance_type          = var.project_instance_type
   subnet_id              = var.project_subnet
   vpc_security_group_ids = [aws_security_group.backend_sg.id]
@@ -91,12 +133,20 @@ resource "aws_instance" "python-node" {
   tags = { Name = "python-node-backend" }
 }
 
-# Node 3: Java Backend
+# Node 3: Java Backend (Port 9090)
 resource "aws_instance" "java-node" {
-  ami                    = var.backend_ami_id
+  ami                    = data.aws_ami.latest_backend.id
   instance_type          = var.project_instance_type
   subnet_id              = var.project_subnet
   vpc_security_group_ids = [aws_security_group.backend_sg.id]
   key_name               = var.project_keyname
   tags = { Name = "java-node-backend" }
+}
+
+# ---------------------------------------------------------
+# OUTPUTS
+# ---------------------------------------------------------
+
+output "frontend_public_ip" {
+  value = aws_instance.web-node.public_ip
 }
