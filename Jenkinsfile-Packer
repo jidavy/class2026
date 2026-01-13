@@ -1,0 +1,46 @@
+pipeline {
+    agent any 
+
+    environment {
+        // These refer to the Credentials you must create in Jenkins UI
+        AWS_ACCESS_KEY_ID     = credentials('aws-access-key-id')
+        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+        AWS_DEFAULT_REGION    = 'eu-west-1'
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                // This pulls your .pkr.hcl files from GitHub
+                checkout scm
+            }
+        }
+
+        stage('Packer Init') {
+            steps {
+                dir('packer') {
+                    // This downloads the AWS plugin we defined in the packer block
+                    sh 'packer init .'
+                }
+            }
+        }
+
+        stage('Packer Validate') {
+            steps {
+                dir('packer') {
+                    // This checks your syntax for errors
+                    sh 'packer validate .'
+                }
+            }
+        }
+
+        stage('Packer Build') {
+            steps {
+                dir('packer') {
+                    // This actually runs the build and creates the 2 AMIs in AWS
+                    sh 'packer build aws-nginx-git-java.pkr.hcl'
+                }
+            }
+        }
+    }
+}
