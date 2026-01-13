@@ -1,8 +1,19 @@
-variable "project_vpc" { type = string }
-variable "project_instance_type" { type = string }
-variable "project_subnet" { type = string }
-variable "project_keyname" { type = string }
+variable "project_vpc" {
+  type        = string
+  description = "The ID of the VPC where resources will be created"
+}
 
-# Separate AMI variables for each tier
-variable "nginx_ami_id" { type = string }
-variable "backend_ami_id" { type = string }
+variable "project_instance_type" {
+  type        = string
+  default     = "t3.micro"
+}
+
+variable "project_subnet" {
+  type        = string
+  description = "The Subnet ID for our instances"
+}
+
+variable "project_keyname" {
+  type        = string
+  description = "The name of the SSH key pair created in AWS"
+}
