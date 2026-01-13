@@ -14,7 +14,7 @@ pipeline {
     stages {
         stage('Checkout App Code') {
             steps {
-                git url: 'https://github.com/techbleat/fruits-veg_market', branch: 'main'
+                git url: 'https://github.com/jidavy/fruits-veg_market.git', branch: 'main'
             }
         }
 
@@ -42,7 +42,7 @@ pipeline {
                 ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.WEB_IP} "
                     sudo yum install git -y
                     sudo rm -rf /usr/share/nginx/html/*
-                    sudo git clone https://github.com/techbleat/fruits-veg_market.git /tmp/app
+                    sudo git clone https://github.com/jidavy/fruits-veg_market.git /tmp/app
                     sudo cp -r /tmp/app/* /usr/share/nginx/html/
                     sudo systemctl restart nginx
                 "
