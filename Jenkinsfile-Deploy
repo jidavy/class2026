@@ -1,84 +1,33 @@
-pipeline {
-    agent any
-
-    environment {
-        AWS_ACCESS_KEY_ID     = credentials('aws-access-key-id')
-        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
-        AWS_DEFAULT_REGION    = 'eu-west-1'
-        SSH_KEY               = credentials('aws-private-key') 
-        
-        PYTHON_PORT = "8080"
-        JAVA_PORT   = "9090"
-    }
-
-    stages {
-        stage('Checkout App Code') {
-            steps {
-                git url: 'https://github.com/techbleat/fruits-veg_market', branch: 'main'
-            }
-        }
-
-        stage('Find Node IPs & Wait') {
-            steps {
-                script {
-                    // Discover Public IPs using AWS Tags
-                    env.WEB_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=web-node-frontend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
-                    env.PYTHON_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=python-node-backend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
-                    env.JAVA_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=java-node-backend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
-
-                    echo "Found IPs. Waiting 30 seconds for SSH services to stabilize..."
-                    sh "sleep 30"
-                }
-            }
-        }
-
-        stage('Deploy Frontend (Nginx)') {
+stage('Deploy Frontend (Nginx)') {
             steps {
                 sh """
                 ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.WEB_IP} "
                     sudo yum install git -y
-                    sudo rm -rf /usr/share/nginx/html/*
                     
-                    # Clone to a clean temp directory
+                    # 1. Clean and Clone
+                    sudo rm -rf /usr/share/nginx/html/*
                     sudo rm -rf /tmp/app
                     sudo git clone https://github.com/techbleat/fruits-veg_market.git /tmp/app
                     
-                    # Move files to web root
+                    # 2. Move files
                     sudo cp -r /tmp/app/* /usr/share/nginx/html/
                     
-                    # FIX: Apply correct permissions so Nginx user can read the files
+                    # 3. FIX: Path Permissions
+                    # Nginx needs +x (execute) on every folder in the path to 'reach' the html folder
+                    sudo chmod 755 /usr/share/nginx
+                    sudo chmod 755 /usr/share/nginx/html
+                    
+                    # 4. FIX: File Permissions
                     sudo chown -R nginx:nginx /usr/share/nginx/html
-                    sudo chmod -R 755 /usr/share/nginx/html
+                    sudo find /usr/share/nginx/html -type d -exec chmod 755 {} +
+                    sudo find /usr/share/nginx/html -type f -exec chmod 644 {} +
+                    
+                    # 5. FIX: SELinux (Very common in Amazon Linux 2023)
+                    # This tells the OS 'it is okay for the webserver to use these files'
+                    sudo chcon -Rt httpd_sys_content_t /usr/share/nginx/html
                     
                     sudo systemctl restart nginx
                 "
                 """
             }
         }
-
-        stage('Deploy Python Backend') {
-            steps {
-                sh """
-                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.PYTHON_IP} "
-                    # Kill any existing process on this port before starting
-                    sudo fuser -k ${env.PYTHON_PORT}/tcp || true
-                    nohup python3 -m http.server ${env.PYTHON_PORT} > python.log 2>&1 &
-                "
-                """
-            }
-        }
-
-        stage('Deploy Java Backend') {
-            steps {
-                sh """
-                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.JAVA_IP} "
-                    # Kill any existing process on this port before starting
-                    sudo fuser -k ${env.JAVA_PORT}/tcp || true
-                    # Note: Ensure your jar file exists in the cloned repo or path
-                    nohup java -jar my-app.jar --server.port=${env.JAVA_PORT} > java.log 2>&1 &
-                "
-                """
-            }
-        }
-    }
-}
