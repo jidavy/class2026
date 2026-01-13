@@ -7,13 +7,18 @@ pipeline {
         AWS_DEFAULT_REGION    = 'eu-west-1'
         SSH_KEY               = credentials('aws-private-key') 
         
-        // Define ports as variables here so they are easy to change in one place
         PYTHON_PORT = "8080"
         JAVA_PORT   = "9090"
     }
 
     stages {
-        stage('Find All Node IPs') {
+        stage('Checkout App Code') {
+            steps {
+                git url: 'https://github.com/techbleat/fruits-veg_market', branch: 'main'
+            }
+        }
+
+        stage('Find Node IPs & Wait') {
             steps {
                 script {
                     // Find Frontend IP
@@ -24,6 +29,9 @@ pipeline {
                     
                     // Find Java Backend IP
                     env.JAVA_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=java-node-backend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
+
+                    echo "Found IPs. Waiting 30 seconds for SSH services to stabilize..."
+                    sh "sleep 30"
                 }
             }
         }
@@ -32,6 +40,7 @@ pipeline {
             steps {
                 sh """
                 ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.WEB_IP} "
+                    sudo yum install git -y
                     sudo rm -rf /usr/share/nginx/html/*
                     sudo git clone https://github.com/techbleat/fruits-veg_market.git /tmp/app
                     sudo cp -r /tmp/app/* /usr/share/nginx/html/
@@ -45,7 +54,6 @@ pipeline {
             steps {
                 sh """
                 ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.PYTHON_IP} "
-                    # Start Python app on the assigned port
                     nohup python3 -m http.server ${env.PYTHON_PORT} > python.log 2>&1 &
                 "
                 """
@@ -56,8 +64,6 @@ pipeline {
             steps {
                 sh """
                 ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.JAVA_IP} "
-                    # Start Java app on the assigned port (assuming a jar file exists)
-                    # For this assignment, we can simulate it or run a simple listener
                     nohup java -jar my-app.jar --server.port=${env.JAVA_PORT} > java.log 2>&1 &
                 "
                 """
