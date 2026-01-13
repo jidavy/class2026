@@ -1,0 +1,35 @@
+pipeline {
+    agent any
+
+    environment {
+        // We need the private key to log into the new servers
+        SSH_KEY = credentials('aws-private-key') 
+        // These are the IPs from your Terraform output
+        WEB_NODE_IP = 'PASTE_YOUR_WEB_PUBLIC_IP_HERE' 
+    }
+
+    stages {
+        stage('Checkout App Code') {
+            steps {
+                // Pull the actual application code (Fruits & Veg Market)
+                git url: 'https://github.com/techbleat/fruits-veg_market', branch: 'main'
+            }
+        }
+
+        stage('Deploy to Frontend') {
+            steps {
+                script {
+                    // This command 'removes' the default Nginx page and 'adds' your app code
+                    sh """
+                    ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${WEB_NODE_IP} "
+                        sudo rm -rf /usr/share/nginx/html/*
+                        sudo git clone https://github.com/techbleat/fruits-veg_market.git /tmp/app
+                        sudo cp -r /tmp/app/* /usr/share/nginx/html/
+                        sudo systemctl restart nginx
+                    "
+                    """
+                }
+            }
+        }
+    }
+}
