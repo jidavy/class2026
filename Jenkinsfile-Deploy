@@ -14,7 +14,7 @@ pipeline {
     stages {
         stage('Checkout App Code') {
             steps {
-                git url: 'https://github.com/techbleat/fruits-veg_market', branch: 'main'
+                git url: 'https://github.com/jidavy/fruits-veg_market', branch: 'main'
             }
         }
 
@@ -41,7 +41,7 @@ pipeline {
                     
                     # Clone to a clean temp directory
                     sudo rm -rf /tmp/app
-                    sudo git clone https://github.com/techbleat/fruits-veg_market.git /tmp/app
+                    sudo git clone https://github.com/jidavy/fruits-veg_market.git /tmp/app
                     
                     # Move files to web root
                     sudo cp -r /tmp/app/* /usr/share/nginx/html/
