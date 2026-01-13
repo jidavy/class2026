@@ -1,0 +1,18 @@
+# --- Terraform ---
+.terraform/                # Folder created by 'terraform init' (huge and unnecessary)
+*.tfstate                  # NEVER share your state file; it contains secrets
+*.tfstate.backup           # Backup of your state
+.terraform.lock.hcl        # Prevents version conflicts (optional to ignore, but safe)
+*.tfvars                   # If you put real passwords here, ignore it!
+
+# --- Packer ---
+packer_cache/              # Temporary files Packer uses to download ISOs
+*.pkr.hcl.lock             # Packer lock files
+
+# --- OS Specific (Windows/Mac) ---
+Thumbs.db                  # Windows thumbnail cache
+.DS_Store                  # Mac folder settings
+.vscode/                   # Your personal VS Code settings
+
+# --- Keys ---
+*.pem                      # NEVER upload your AWS Private Keys (.pem files)
