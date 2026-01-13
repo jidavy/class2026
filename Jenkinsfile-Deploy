@@ -14,20 +14,16 @@ pipeline {
     stages {
         stage('Checkout App Code') {
             steps {
-                git url: 'https://github.com/jidavy/fruits-veg_market.git', branch: 'main'
+                git url: 'https://github.com/techbleat/fruits-veg_market', branch: 'main'
             }
         }
 
         stage('Find Node IPs & Wait') {
             steps {
                 script {
-                    // Find Frontend IP
+                    // Discover Public IPs using AWS Tags
                     env.WEB_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=web-node-frontend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
-                    
-                    // Find Python Backend IP
                     env.PYTHON_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=python-node-backend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
-                    
-                    // Find Java Backend IP
                     env.JAVA_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=java-node-backend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
 
                     echo "Found IPs. Waiting 30 seconds for SSH services to stabilize..."
@@ -42,8 +38,18 @@ pipeline {
                 ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.WEB_IP} "
                     sudo yum install git -y
                     sudo rm -rf /usr/share/nginx/html/*
-                    sudo git clone https://github.com/jidavy/fruits-veg_market.git /tmp/app
+                    
+                    # Clone to a clean temp directory
+                    sudo rm -rf /tmp/app
+                    sudo git clone https://github.com/techbleat/fruits-veg_market.git /tmp/app
+                    
+                    # Move files to web root
                     sudo cp -r /tmp/app/* /usr/share/nginx/html/
+                    
+                    # FIX: Apply correct permissions so Nginx user can read the files
+                    sudo chown -R nginx:nginx /usr/share/nginx/html
+                    sudo chmod -R 755 /usr/share/nginx/html
+                    
                     sudo systemctl restart nginx
                 "
                 """
@@ -54,6 +60,8 @@ pipeline {
             steps {
                 sh """
                 ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.PYTHON_IP} "
+                    # Kill any existing process on this port before starting
+                    sudo fuser -k ${env.PYTHON_PORT}/tcp || true
                     nohup python3 -m http.server ${env.PYTHON_PORT} > python.log 2>&1 &
                 "
                 """
@@ -64,6 +72,9 @@ pipeline {
             steps {
                 sh """
                 ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.JAVA_IP} "
+                    # Kill any existing process on this port before starting
+                    sudo fuser -k ${env.JAVA_PORT}/tcp || true
+                    # Note: Ensure your jar file exists in the cloned repo or path
                     nohup java -jar my-app.jar --server.port=${env.JAVA_PORT} > java.log 2>&1 &
                 "
                 """
