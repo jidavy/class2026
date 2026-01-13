@@ -2,33 +2,65 @@ pipeline {
     agent any
 
     environment {
-        // We need the private key to log into the new servers
-        SSH_KEY = credentials('aws-private-key') 
-        // These are the IPs from your Terraform output
-        WEB_NODE_IP = 'PASTE_YOUR_WEB_PUBLIC_IP_HERE' 
+        AWS_ACCESS_KEY_ID     = credentials('aws-access-key-id')
+        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+        AWS_DEFAULT_REGION    = 'eu-west-1'
+        SSH_KEY               = credentials('aws-private-key') 
+        
+        // Define ports as variables here so they are easy to change in one place
+        PYTHON_PORT = "8080"
+        JAVA_PORT   = "9090"
     }
 
     stages {
-        stage('Checkout App Code') {
+        stage('Find All Node IPs') {
             steps {
-                // Pull the actual application code (Fruits & Veg Market)
-                git url: 'https://github.com/techbleat/fruits-veg_market', branch: 'main'
+                script {
+                    // Find Frontend IP
+                    env.WEB_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=web-node-frontend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
+                    
+                    // Find Python Backend IP
+                    env.PYTHON_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=python-node-backend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
+                    
+                    // Find Java Backend IP
+                    env.JAVA_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=java-node-backend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
+                }
             }
         }
 
-        stage('Deploy to Frontend') {
+        stage('Deploy Frontend (Nginx)') {
             steps {
-                script {
-                    // This command 'removes' the default Nginx page and 'adds' your app code
-                    sh """
-                    ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${WEB_NODE_IP} "
-                        sudo rm -rf /usr/share/nginx/html/*
-                        sudo git clone https://github.com/techbleat/fruits-veg_market.git /tmp/app
-                        sudo cp -r /tmp/app/* /usr/share/nginx/html/
-                        sudo systemctl restart nginx
-                    "
-                    """
-                }
+                sh """
+                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.WEB_IP} "
+                    sudo rm -rf /usr/share/nginx/html/*
+                    sudo git clone https://github.com/techbleat/fruits-veg_market.git /tmp/app
+                    sudo cp -r /tmp/app/* /usr/share/nginx/html/
+                    sudo systemctl restart nginx
+                "
+                """
+            }
+        }
+
+        stage('Deploy Python Backend') {
+            steps {
+                sh """
+                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.PYTHON_IP} "
+                    # Start Python app on the assigned port
+                    nohup python3 -m http.server ${env.PYTHON_PORT} > python.log 2>&1 &
+                "
+                """
+            }
+        }
+
+        stage('Deploy Java Backend') {
+            steps {
+                sh """
+                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.JAVA_IP} "
+                    # Start Java app on the assigned port (assuming a jar file exists)
+                    # For this assignment, we can simulate it or run a simple listener
+                    nohup java -jar my-app.jar --server.port=${env.JAVA_PORT} > java.log 2>&1 &
+                "
+                """
             }
         }
     }
