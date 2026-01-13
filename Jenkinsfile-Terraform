@@ -1,0 +1,76 @@
+pipeline {
+    agent any 
+
+    parameters {
+        choice (
+            name: 'TF_ACTION',
+            choices :['plan', 'apply', 'destroy'],
+            description: 'Select which Terraform action to run'
+        )
+    }
+    
+    environment {
+        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+        AWS_ACCESS_KEY_ID = credentials('aws-access-key-id')
+        AWS_DEFAULT_REGION = 'eu-west-1'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                dir('terraform') {
+                    sh 'terraform init -reconfigure'
+                }
+            }
+        }
+
+        stage('Terraform Validate') {
+            steps {
+                dir('terraform') {
+                    sh 'terraform validate'
+                }
+            }
+        } 
+        
+        stage('Terraform Plan') {
+            // Architect Change: Run plan for BOTH 'plan' and 'apply' actions
+            when {
+                expression { params.TF_ACTION == 'plan' || params.TF_ACTION == 'apply' }
+            }
+            steps {
+                dir('terraform') {
+                    sh 'terraform plan -var-file="dev.tfvars"'
+                }
+            }
+        } 
+
+        stage('Terraform Apply') {
+            when {
+                expression { params.TF_ACTION == 'apply' }
+            }
+            steps {
+                dir('terraform') {
+                    // This uses the latest AMIs found by the Data Sources
+                    sh 'terraform apply -var-file="dev.tfvars" -auto-approve'
+                }
+            }
+        } 
+
+        stage('Terraform Destroy') {
+            when {
+                expression { params.TF_ACTION == 'destroy' }
+            }
+            steps {
+                dir('terraform') {
+                    sh 'terraform destroy -var-file="dev.tfvars" -auto-approve'
+                }
+            }
+        } 
+    }
+}
