@@ -6,7 +6,6 @@ terraform {
     encrypt = true
   }
   required_version = ">= 1.6.0"
-
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -20,9 +19,23 @@ provider "aws" {
 }
 
 # ---------------------------------------------------------
+# DATA SOURCES: VPC and Subnet
+# ---------------------------------------------------------
+# Fetch the default VPC
+data "aws_vpc" "default" {
+  default = true
+}
+
+# Fetch a default subnet in the VPC
+data "aws_subnet" "default" {
+  vpc_id            = data.aws_vpc.default.id
+  default_for_az    = true
+  availability_zone = "eu-west-1a"  # Adjust if needed
+}
+
+# ---------------------------------------------------------
 # STEP 1: Search for the latest AMIs built by Packer
 # ---------------------------------------------------------
-
 data "aws_ami" "latest_nginx" {
   most_recent = true
   owners      = ["self"]
@@ -44,12 +57,11 @@ data "aws_ami" "latest_backend" {
 # ---------------------------------------------------------
 # SECURITY GROUPS
 # ---------------------------------------------------------
-
 # Frontend Security Group
 resource "aws_security_group" "web_sg" {
   name        = "web-sg"
   description = "Allow SSH and HTTP"
-  vpc_id      = var.project_vpc
+  vpc_id      = data.aws_vpc.default.id
 
   ingress {
     from_port   = 22
@@ -75,8 +87,8 @@ resource "aws_security_group" "web_sg" {
 
 # Backend Security Group (Ports 8080 and 9090)
 resource "aws_security_group" "backend_sg" {
-  name        = "backend-sg"
-  vpc_id      = var.project_vpc
+  name   = "backend-sg"
+  vpc_id = data.aws_vpc.default.id
 
   ingress {
     from_port   = 22
@@ -112,14 +124,14 @@ resource "aws_security_group" "backend_sg" {
 # ---------------------------------------------------------
 # STEP 2: EC2 INSTANCES (Linked to Data Sources)
 # ---------------------------------------------------------
-
 # Node 1: Frontend (Nginx)
 resource "aws_instance" "web-node" {
   ami                    = data.aws_ami.latest_nginx.id
   instance_type          = var.project_instance_type
-  subnet_id              = var.project_subnet
+  subnet_id              = data.aws_subnet.default.id
   vpc_security_group_ids = [aws_security_group.web_sg.id]
   key_name               = var.project_keyname
+
   tags = { Name = "web-node-frontend" }
 }
 
@@ -127,9 +139,10 @@ resource "aws_instance" "web-node" {
 resource "aws_instance" "python-node" {
   ami                    = data.aws_ami.latest_backend.id
   instance_type          = var.project_instance_type
-  subnet_id              = var.project_subnet
+  subnet_id              = data.aws_subnet.default.id
   vpc_security_group_ids = [aws_security_group.backend_sg.id]
   key_name               = var.project_keyname
+
   tags = { Name = "python-node-backend" }
 }
 
@@ -137,16 +150,16 @@ resource "aws_instance" "python-node" {
 resource "aws_instance" "java-node" {
   ami                    = data.aws_ami.latest_backend.id
   instance_type          = var.project_instance_type
-  subnet_id              = var.project_subnet
+  subnet_id              = data.aws_subnet.default.id
   vpc_security_group_ids = [aws_security_group.backend_sg.id]
   key_name               = var.project_keyname
+
   tags = { Name = "java-node-backend" }
 }
 
 # ---------------------------------------------------------
 # OUTPUTS
 # ---------------------------------------------------------
-
 output "frontend_public_ip" {
   value = aws_instance.web-node.public_ip
 }
