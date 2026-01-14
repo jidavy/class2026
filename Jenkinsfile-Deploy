@@ -7,83 +7,48 @@ pipeline {
         AWS_DEFAULT_REGION    = 'eu-west-1'
         SSH_KEY               = credentials('aws-private-key') 
         
-        // Backend ports
-        PYTHON_PORT = "8080"
-        JAVA_PORT   = "9090"
+        // Backend configuration
+        PYTHON_PORT = "9000"
+        JAVA_PORT   = "8080"
+        APP_REPO    = "https://github.com/jidavy/fruits-veg_market.git"
     }
     
     stages {
-        stage('Checkout App Code') {
+        stage('Checkout Infrastructure Code') {
             steps {
-                git url: 'https://github.com/jidavy/fruits-veg_market.git', branch: 'main'
+                // This ensures the pipeline has access to the latest scripts in class2026
+                checkout scm
             }
         }
         
-        stage('Find Node IPs & Wait') {
+        stage('Find Node IPs') {
             steps {
                 script {
-                    // Discover Public IPs using AWS Tags
-                    env.WEB_IP = sh(
-                        script: """aws ec2 describe-instances \
-                            --filters 'Name=tag:Name,Values=web-node-frontend' \
-                                      'Name=instance-state-name,Values=running' \
-                            --query 'Reservations[*].Instances[*].PublicIpAddress' \
-                            --output text""",
-                        returnStdout: true
-                    ).trim()
+                    env.WEB_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=web-node-frontend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
+                    env.PYTHON_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=python-node-backend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
+                    env.JAVA_IP = sh(script: "aws ec2 describe-instances --filters 'Name=tag:Name,Values=java-node-backend' 'Name=instance-state-name,Values=running' --query 'Reservations[*].Instances[*].PublicIpAddress' --output text", returnStdout: true).trim()
                     
-                    env.PYTHON_IP = sh(
-                        script: """aws ec2 describe-instances \
-                            --filters 'Name=tag:Name,Values=python-node-backend' \
-                                      'Name=instance-state-name,Values=running' \
-                            --query 'Reservations[*].Instances[*].PublicIpAddress' \
-                            --output text""",
-                        returnStdout: true
-                    ).trim()
-                    
-                    env.JAVA_IP = sh(
-                        script: """aws ec2 describe-instances \
-                            --filters 'Name=tag:Name,Values=java-node-backend' \
-                                      'Name=instance-state-name,Values=running' \
-                            --query 'Reservations[*].Instances[*].PublicIpAddress' \
-                            --output text""",
-                        returnStdout: true
-                    ).trim()
-                    
-                    echo "Found IPs:"
-                    echo "  Web: ${env.WEB_IP}"
-                    echo "  Python: ${env.PYTHON_IP}"
-                    echo "  Java: ${env.JAVA_IP}"
-                    echo "Waiting 45 seconds for SSH services..."
-                    sh "sleep 45"
+                    echo "Infrastructure Discovered:"
+                    echo "Web: ${env.WEB_IP} | Python: ${env.PYTHON_IP} | Java: ${env.JAVA_IP}"
                 }
             }
         }
         
         stage('Deploy Python Backend') {
             steps {
-                script {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.PYTHON_IP} '
-                            # Install dependencies
-                            sudo yum install git python3-pip -y
-                            
-                            # Clean and clone repo
-                            rm -rf ~/fruits-veg_market
-                            git clone https://github.com/jidavy/fruits-veg_market.git ~/fruits-veg_market
-                            cd ~/fruits-veg_market/python
-                            
-                            # Create virtual environment and install packages
-                            python3 -m venv .venv
-                            source .venv/bin/activate
-                            pip install -r requirements.txt
-                            
-                            # Stop any existing process
-                            sudo systemctl stop fruits.service 2>/dev/null || true
-                            pkill -f "uvicorn main:app" || true
-                            
-                            # Create systemd service
-                            sudo tee /etc/systemd/system/fruits.service > /dev/null <<EOF
+                sh """
+                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.PYTHON_IP} '
+                    sudo yum install git python3-pip -y
+                    rm -rf ~/fruits-veg_market
+                    git clone ${env.APP_REPO} ~/fruits-veg_market
+                    cd ~/fruits-veg_market/python
+                    
+                    python3 -m venv .venv
+                    source .venv/bin/activate
+                    pip install -r requirements.txt
+                    
+                    # Create service file in /tmp to avoid permission redirection issues
+                    cat <<EOF > /tmp/fruits.service
 [Unit]
 Description=FastAPI Fruits Service
 After=network.target
@@ -94,50 +59,36 @@ User=ec2-user
 Group=ec2-user
 WorkingDirectory=/home/ec2-user/fruits-veg_market/python
 Environment="PATH=/home/ec2-user/fruits-veg_market/python/.venv/bin"
-ExecStart=/home/ec2-user/fruits-veg_market/python/.venv/bin/uvicorn main:app --host 0.0.0.0 --port ${PYTHON_PORT}
+ExecStart=/home/ec2-user/fruits-veg_market/python/.venv/bin/uvicorn main:app --host 0.0.0.0 --port ${env.PYTHON_PORT}
 Restart=always
-RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
-                            
-                            # Start service
-                            sudo systemctl daemon-reload
-                            sudo systemctl enable fruits.service
-                            sudo systemctl start fruits.service
-                            
-                            # Verify it is running
-                            sleep 3
-                            sudo systemctl status fruits.service
-                        '
-                    """
-                }
+                    sudo mv /tmp/fruits.service /etc/systemd/system/fruits.service
+                    sudo systemctl daemon-reload
+                    sudo systemctl enable fruits.service
+                    sudo systemctl restart fruits.service
+                    
+                    sleep 5
+                    sudo systemctl is-active fruits.service || (sudo journalctl -u fruits.service -n 20 && exit 1)
+                '
+                """
             }
         }
-        
+
         stage('Deploy Java Backend') {
             steps {
-                script {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.JAVA_IP} '
-                            # Install dependencies (Maven for building)
-                            sudo yum install git maven -y
-                            
-                            # Clean and clone repo
-                            rm -rf ~/fruits-veg_market
-                            git clone https://github.com/jidavy/fruits-veg_market.git ~/fruits-veg_market
-                            cd ~/fruits-veg_market/java
-                            
-                            # Build the Spring Boot application
-                            mvn clean package -DskipTests
-                            
-                            # Stop any existing process
-                            sudo systemctl stop vegetables.service 2>/dev/null || true
-                            pkill -f "produce-app.*jar" || true
-                            
-                            # Create systemd service
-                            sudo tee /etc/systemd/system/vegetables.service > /dev/null <<EOF
+                sh """
+                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.JAVA_IP} '
+                    sudo yum install git maven java-17-amazon-corretto -y
+                    rm -rf ~/fruits-veg_market
+                    git clone ${env.APP_REPO} ~/fruits-veg_market
+                    cd ~/fruits-veg_market/java
+                    
+                    mvn clean package -DskipTests
+                    
+                    cat <<EOF > /tmp/vegetables.service
 [Unit]
 Description=Spring Boot Vegetables Service
 After=network.target
@@ -147,113 +98,60 @@ Type=simple
 User=ec2-user
 Group=ec2-user
 WorkingDirectory=/home/ec2-user/fruits-veg_market/java
-ExecStart=/usr/bin/java -jar target/produce-app-0.0.1-SNAPSHOT.jar --server.port=${JAVA_PORT}
+ExecStart=/usr/bin/java -jar target/produce-app-0.0.1-SNAPSHOT.jar --server.port=${env.JAVA_PORT}
 Restart=always
-RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
-                            
-                            # Start service
-                            sudo systemctl daemon-reload
-                            sudo systemctl enable vegetables.service
-                            sudo systemctl start vegetables.service
-                            
-                            # Verify it is running
-                            sleep 3
-                            sudo systemctl status vegetables.service
-                        '
-                    """
-                }
+                    sudo mv /tmp/vegetables.service /etc/systemd/system/vegetables.service
+                    sudo systemctl daemon-reload
+                    sudo systemctl enable vegetables.service
+                    sudo systemctl restart vegetables.service
+                '
+                """
             }
         }
         
         stage('Deploy Frontend (Nginx)') {
             steps {
-                script {
-                    sh """
-                        ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.WEB_IP} '
-                            # Install dependencies
-                            sudo yum install git -y
-                            
-                            # Clean and clone repo
-                            rm -rf ~/fruits-veg_market
-                            git clone https://github.com/jidavy/fruits-veg_market.git ~/fruits-veg_market
-                            
-                            # Update index.html with actual backend IPs
-                            cd ~/fruits-veg_market/web
-                            sed -i "s|FRUIT_MACHINE|${PYTHON_IP}|g" index.html
-                            sed -i "s|VEG_MACHINE|${JAVA_IP}|g" index.html
-                            sed -i "s|9000|${PYTHON_PORT}|g" index.html
-                            sed -i "s|8080|${JAVA_PORT}|g" index.html
-                            
-                            # Deploy to Nginx
-                            sudo rm -rf /usr/share/nginx/html/*
-                            sudo cp index.html /usr/share/nginx/html/
-                            
-                            # Set proper permissions
-                            sudo chown -R nginx:nginx /usr/share/nginx/html
-                            sudo chmod -R 755 /usr/share/nginx/html
-                            
-                            # Restart Nginx
-                            sudo systemctl restart nginx
-                            sudo systemctl status nginx
-                        '
-                    """
-                }
-            }
-        }
-        
-        stage('Health Check') {
-            steps {
-                script {
-                    echo "=== Deployment Summary ==="
-                    echo "Frontend URL: http://${env.WEB_IP}"
-                    echo "Python API: http://${env.PYTHON_IP}:${PYTHON_PORT}/fruits"
-                    echo "Java API: http://${env.JAVA_IP}:${JAVA_PORT}/vegetables"
-                    echo ""
-                    echo "Testing endpoints..."
+                sh """
+                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ec2-user@${env.WEB_IP} '
+                    sudo yum install git nginx -y
+                    sudo systemctl start nginx
+                    sudo systemctl enable nginx
                     
-                    // Give services time to fully start
-                    sh "sleep 10"
+                    rm -rf ~/fruits-veg_market
+                    git clone ${env.APP_REPO} ~/fruits-veg_market
                     
-                    // Test Python API
-                    sh """
-                        echo "Testing Python API..."
-                        curl -f http://${env.PYTHON_IP}:${PYTHON_PORT}/fruits || echo "Python API not responding yet"
-                    """
+                    cd ~/fruits-veg_market/web
+                    # Use unique delimiters for sed to avoid IP/Port conflicts
+                    sed -i "s|FRUIT_MACHINE|${env.PYTHON_IP}|g" index.html
+                    sed -i "s|VEG_MACHINE|${env.JAVA_IP}|g" index.html
+                    sed -i "s|9000|${env.PYTHON_PORT}|g" index.html
+                    sed -i "s|8080|${env.JAVA_PORT}|g" index.html
                     
-                    // Test Java API
-                    sh """
-                        echo "Testing Java API..."
-                        curl -f http://${env.JAVA_IP}:${JAVA_PORT}/vegetables || echo "Java API not responding yet"
-                    """
+                    sudo rm -rf /usr/share/nginx/html/*
+                    sudo cp index.html /usr/share/nginx/html/
                     
-                    // Test Frontend
-                    sh """
-                        echo "Testing Frontend..."
-                        curl -f http://${env.WEB_IP} || echo "Frontend not responding yet"
-                    """
-                }
+                    # Fix Permissions and SELinux for Amazon Linux 2023
+                    sudo chown -R nginx:nginx /usr/share/nginx/html
+                    sudo chmod -R 755 /usr/share/nginx/html
+                    sudo chcon -Rt httpd_sys_content_t /usr/share/nginx/html || true
+                    
+                    sudo systemctl restart nginx
+                '
+                """
             }
         }
     }
     
     post {
         success {
-            echo """
-            ╔════════════════════════════════════════════════════════╗
-            ║          DEPLOYMENT SUCCESSFUL!                        ║
-            ╠════════════════════════════════════════════════════════╣
-            ║ Frontend: http://${env.WEB_IP}                        ║
-            ║ Python:   http://${env.PYTHON_IP}:${PYTHON_PORT}      ║
-            ║ Java:     http://${env.JAVA_IP}:${JAVA_PORT}          ║
-            ╚════════════════════════════════════════════════════════╝
-            """
+            echo "URL: http://${env.WEB_IP}"
         }
         failure {
-            echo "Deployment failed! Check the logs above for details."
+            echo "Deployment failed. Check the stage logs."
         }
     }
 }
